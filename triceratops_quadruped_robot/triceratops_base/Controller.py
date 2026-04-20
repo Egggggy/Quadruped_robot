@@ -15,6 +15,7 @@ from Triceratops_IK import InverseKinematics
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from std_msgs.msg import String
 
 from math import pi
 import threading
@@ -26,14 +27,15 @@ import time
 DEGREE_TO_SERVO = 4095/360
 
 class CmdVelSubscriber(Node):
-    def __init__(self):
+    def __init__(self, mode_callback=None):
         super().__init__('cmd_vel_subscriber')
         self.subscription = self.create_subscription(
-            Twist,
-            '/cmd_vel',
-            self.listener_callback,
-            10
+            Twist, '/cmd_vel', self.listener_callback, 10
         )
+        if mode_callback is not None:
+            self.create_subscription(
+                String, '/robot_mode', mode_callback, 10
+            )
 
         self.linear_x = 0.0
         self.linear_y = 0.0
@@ -71,7 +73,7 @@ class Command:
 
 class RobotControl:
     def __init__(self):
-        self.cmd_vel = CmdVelSubscriber()
+        self.cmd_vel = CmdVelSubscriber(mode_callback=self._on_robot_mode)
         self.executor = rclpy.executors.SingleThreadedExecutor()
         self.executor.add_node(self.cmd_vel)
 
@@ -88,6 +90,21 @@ class RobotControl:
         self.command = Command()
         self.control_cmd = ControlCmd()
         self.is_walking = False
+
+    def _on_robot_mode(self, msg):
+        mode = msg.data
+        print(f"[robot_mode] 收到指令: {mode}")
+        actions = {
+            "start_gait": self.start_gait,
+            "stop":       self.stop_gait,
+            "reset":      self.control_cmd.reset_to_original,
+            "handshake":  self._handshake_thread,
+            "sway":       self._sway_thread,
+        }
+        if mode in actions:
+            actions[mode]()
+        else:
+            print(f"[robot_mode] 未知指令: {mode}")
 
     def get_vel_data(self):
         self.command.horizontal_velocity = np.array([self.cmd_vel.linear_x, self.cmd_vel.linear_y])
@@ -147,17 +164,21 @@ class RobotControl:
         self.is_walking = True
         self.puppy_move_thread = threading.Thread(target=self.puppy_move, daemon=True)
         self.puppy_move_thread.start()
+        print("[start_gait] 步態啟動")
 
     def stop_gait(self):
         self.is_walking = False
         if hasattr(self, 'puppy_move_thread'):
-            self.puppy_move_thread.join()
+            self.puppy_move_thread.join(timeout=3.0)
+        print("[stop_gait] 步態停止")
 
     def handshake(self):
         """停步態 → 站好 → 漸進抬 FL 腿做握手 → 回站姿 → 重啟步態"""
+        print("[handshake] 開始握手動作")
         self.stop_gait()
         time.sleep(0.5)
         self.control_cmd.reset_to_original()
+        print("[handshake] 站好，準備抬腿")
         time.sleep(1)
 
         fl_lower_target = 1600
@@ -174,18 +195,30 @@ class RobotControl:
                         [1989, current_lower,    2048, 2001]]
             self.control_cmd.motor_position_control(position)
 
+        print("[handshake] 握手姿勢保持中")
         time.sleep(2)
         self.control_cmd.reset_to_original()
         time.sleep(1)
         self.start_gait()
+        print("[handshake] 完成")
+
+    def _handshake_thread(self):
+        threading.Thread(target=self.handshake, daemon=True).start()
 
     def sway(self):
         """腰部左右晃動"""
+        print("[sway] 開始左右晃動")
         self.control_cmd.mid_motor_position_control(mid_position=1250, step=20, delay=0.01)
+        print("[sway] 左側")
         time.sleep(1)
         self.control_cmd.mid_motor_position_control(mid_position=2846, step=10, delay=0.01)
+        print("[sway] 右側")
         time.sleep(1)
         self.control_cmd.mid_motor_position_control(mid_position=2048, step=10, delay=0.01)
+        print("[sway] 回中心完成")
+
+    def _sway_thread(self):
+        threading.Thread(target=self.sway, daemon=True).start()
 
 
 class ControlCmd:
@@ -293,8 +326,8 @@ def main():
         "enable":   robot_control.control_cmd.enable_all_motor,
         "disable":  robot_control.control_cmd.disable_all_motor,
         "read":     robot_control.control_cmd.read_all_motor_data,
-        "handshake":robot_control.handshake,
-        "sway":     robot_control.sway,
+        "handshake":robot_control._handshake_thread,
+        "sway":     robot_control._sway_thread,
     }
 
     atexit.register(robot_control.cleanup)
