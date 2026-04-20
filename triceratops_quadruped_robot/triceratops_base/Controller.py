@@ -18,14 +18,10 @@ from geometry_msgs.msg import Twist
 
 from math import pi
 import threading
-import queue
+import concurrent.futures
 import traceback
 import atexit
 import time
-
-import threading
-import concurrent.futures
-import numpy as np
 
 DEGREE_TO_SERVO = 4095/360
 
@@ -61,11 +57,11 @@ class CmdVelSubscriber(Node):
 class RobotState:
     def __init__(self):
         self.config = RobotConfiguration()
-        self.ticks = 0                    
+        self.ticks = 0
         self.height = -0.10
         self.foot_locations = self.config.default_stance
         self.joint_angles = np.zeros((3, 4))
-        self.last_goal = np.zeros(4) 
+        self.last_goal = np.zeros(4)
 
 class Command:
     def __init__(self):
@@ -91,6 +87,7 @@ class RobotControl:
         self.state = RobotState()
         self.command = Command()
         self.control_cmd = ControlCmd()
+        self.is_walking = False
 
     def get_vel_data(self):
         self.command.horizontal_velocity = np.array([self.cmd_vel.linear_x, self.cmd_vel.linear_y])
@@ -108,10 +105,9 @@ class RobotControl:
 
         for leg_index in range(4):
             contact_mode = contact_modes[leg_index]
-            # foot_location = state.foot_locations[:, leg_index]
-            if contact_mode == 1:  
+            if contact_mode == 1:
                 new_location = self.stance_controller.next_foot_location(leg_index, state, command)
-            else: 
+            else:
                 swing_proportion = (
                     self.gait_controller.subphase_ticks(state.ticks) / self.config.swing_ticks
                 )
@@ -123,10 +119,9 @@ class RobotControl:
         return new_foot_locations, contact_modes
 
     def puppy_move(self):
-        while True:
+        while self.is_walking:
             self.get_vel_data()
 
-            # Asynchronously calculate foot placements
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future_foot_locations = executor.submit(self.step_gait, self.state, self.command)
 
@@ -134,7 +129,6 @@ class RobotControl:
                 self.state.foot_locations
             )
 
-            # Wait for foot placements to be ready
             self.state.foot_locations, _ = future_foot_locations.result()
 
             goal = (
@@ -142,12 +136,57 @@ class RobotControl:
                 + self.config.leg_center_position
             )
 
-            # Only update motor positions if the goal has significantly changed
             if np.linalg.norm(goal - self.state.last_goal) > self.config.goal_change_threshold:
                 self.control_cmd.motor_position_control(goal)
                 self.state.last_goal = goal
 
-            self.state.ticks += 1    
+            self.state.ticks += 1
+
+    def start_gait(self):
+        self.stop_gait()
+        self.is_walking = True
+        self.puppy_move_thread = threading.Thread(target=self.puppy_move, daemon=True)
+        self.puppy_move_thread.start()
+
+    def stop_gait(self):
+        self.is_walking = False
+        if hasattr(self, 'puppy_move_thread'):
+            self.puppy_move_thread.join()
+
+    def handshake(self):
+        """停步態 → 站好 → 漸進抬 FL 腿做握手 → 回站姿 → 重啟步態"""
+        self.stop_gait()
+        time.sleep(0.5)
+        self.control_cmd.reset_to_original()
+        time.sleep(1)
+
+        fl_lower_target = 1600
+        fl_upper_target = 1300
+        fl_bottom_target = 2048
+
+        for i in range(20):
+            progress = i / 10.0
+            current_lower = int(2048 + progress * (fl_lower_target - 2048))
+            current_upper = int(2048 + progress * (fl_upper_target - 2048))
+            # leg_motor_list 順序: [0]=hip, [1]=higher, [2]=lower
+            position = [[2048, fl_bottom_target, 2048, 2048],
+                        [2541, current_upper,    2100, 2100],
+                        [1989, current_lower,    2048, 2001]]
+            self.control_cmd.motor_position_control(position)
+
+        time.sleep(2)
+        self.control_cmd.reset_to_original()
+        time.sleep(1)
+        self.start_gait()
+
+    def sway(self):
+        """腰部左右晃動"""
+        self.control_cmd.mid_motor_position_control(mid_position=1250, step=20, delay=0.01)
+        time.sleep(1)
+        self.control_cmd.mid_motor_position_control(mid_position=2846, step=10, delay=0.01)
+        time.sleep(1)
+        self.control_cmd.mid_motor_position_control(mid_position=2048, step=10, delay=0.01)
+
 
 class ControlCmd:
     """Low-level control of Dynamixel motors."""
@@ -161,23 +200,24 @@ class ControlCmd:
         self.robot_dynamixel = RobotDynamixel()
         self.dynamixel = DXL_Communication(self.robot_dynamixel.DEVICE_NAME, self.robot_dynamixel.B_RATE)
         self.dynamixel.activateDXLConnection()
-        
-    def setup_motors(self):
-        motor_names = ['FR_higher', 'FR_lower', 'FR_hip',  
-                        'FL_higher', 'FL_lower', 'FL_hip',
-                       'RR_higher', 'RR_lower', 'RR_hip',
-                       'RL_higher', 'RL_lower', 'RL_hip']
 
-        self.motor_ids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-        self.motors = {name: self.dynamixel.createMotor(name, motor_number=id_) 
-                    for name, id_ in zip(motor_names, self.motor_ids)}
+    def setup_motors(self):
+        motor_names = ['FR_higher', 'FR_lower', 'FR_hip',
+                       'FL_higher', 'FL_lower', 'FL_hip',
+                       'RR_higher', 'RR_lower', 'RR_hip',
+                       'RL_higher', 'RL_lower', 'RL_hip',
+                       'waist_axis1', 'waist_axis2']
+
+        self.motor_ids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+        self.motors = {name: self.dynamixel.createMotor(name, motor_number=id_)
+                       for name, id_ in zip(motor_names, self.motor_ids)}
 
         self.leg_motor_list = [
             [self.motors['FR_hip'], self.motors['FL_hip'], self.motors['RR_hip'], self.motors['RL_hip']],
             [self.motors['FR_higher'], self.motors['FL_higher'], self.motors['RR_higher'], self.motors['RL_higher']],
             [self.motors['FR_lower'], self.motors['FL_lower'], self.motors['RR_lower'], self.motors['RL_lower']]
         ]
-    
+
     def initialize_motor_states(self):
         self.dynamixel.rebootAllMotor()
         self.dynamixel.updateMotorData()
@@ -202,7 +242,7 @@ class ControlCmd:
     def read_all_motor_data(self):
         self.update_joint_state()
         return print(self.joint_position)
-    
+
     def update_joint_state(self):
         self.dynamixel.updateMotorData()
         self.joint_position = np.zeros((3, 4))
@@ -215,22 +255,46 @@ class ControlCmd:
 
     def motor_position_control(self, position=None):
         if position is None:
-            position = [[2048 ,2048, 2048, 2048],
+            position = [[2048, 2048, 2048, 2048],
                         [1992, 2047, 2092, 2099],
-                        [2048 ,2048, 2048, 2048]]
-        
+                        [2048, 2048, 2048, 2048]]
+
         for i, motor_list in enumerate(self.leg_motor_list):
             for j, motor in enumerate(motor_list):
                 motor.writePosition(int(position[i][j]))
 
         self.dynamixel.sentAllCmd()
 
+    def mid_motor_position_control(self, mid_position, step=20, delay=0.01):
+        """漸進移動腰部馬達到目標位置"""
+        self.dynamixel.updateMotorData()
+        current = self.motors['waist_axis1'].PRESENT_POSITION_value
+        direction = 1 if mid_position > current else -1
+
+        while (direction == 1 and current < mid_position) or \
+              (direction == -1 and current > mid_position):
+            current += direction * step
+            current = min(current, mid_position) if direction == 1 else max(current, mid_position)
+            self.motors['waist_axis1'].writePosition(current)
+            self.motors['waist_axis2'].writePosition(current)
+            self.dynamixel.sentAllCmd()
+            time.sleep(delay)
+
+
 def main():
     rclpy.init()
     robot_control = RobotControl()
+    robot_control.control_cmd.reset_to_original()
 
     command_dict = {
-        "s":robot_control.puppy_move,
+        "s":        robot_control.start_gait,
+        "stop":     robot_control.stop_gait,
+        "reset":    robot_control.control_cmd.reset_to_original,
+        "enable":   robot_control.control_cmd.enable_all_motor,
+        "disable":  robot_control.control_cmd.disable_all_motor,
+        "read":     robot_control.control_cmd.read_all_motor_data,
+        "handshake":robot_control.handshake,
+        "sway":     robot_control.sway,
     }
 
     atexit.register(robot_control.cleanup)
