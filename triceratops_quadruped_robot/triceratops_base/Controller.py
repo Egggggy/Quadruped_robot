@@ -177,8 +177,8 @@ class RobotControl:
         print("[handshake] 開始握手動作")
         self.stop_gait()
         time.sleep(0.5)
-        self.control_cmd.reset_to_original()
-        time.sleep(0.5)
+        #self.control_cmd.reset_to_original()
+        #time.sleep(0.5)
         position = [[2048, 2048, 2048, 2048],
                     [1900, 2048, 2090, 2048],
                     [2600, 2048, 2090, 2300]]
