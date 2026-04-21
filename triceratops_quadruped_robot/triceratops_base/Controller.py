@@ -286,16 +286,20 @@ class ControlCmd:
     def reset_to_original(self, position=None):
         self.motor_position_control()
 
-    def motor_position_control(self, position=None):
+    def motor_position_control(self, position=None, waist=None):
         if position is None:
             position = [[2048, 2048, 2048, 2048],
                         [1992, 2047, 2092, 2099],
-                        [2048, 2048, 2048, 2048],
-                        [2048, 2030]]
+                        [2048, 2048, 2048, 2048]]
 
         for i, motor_list in enumerate(self.leg_motor_list):
             for j, motor in enumerate(motor_list):
                 motor.writePosition(int(position[i][j]))
+
+        if waist is None:
+            waist = [2048, 2030]
+        self.motors['waist_axis1'].writePosition(int(waist[0]))
+        self.motors['waist_axis2'].writePosition(int(waist[1]))
 
         self.dynamixel.sentAllCmd()
 
