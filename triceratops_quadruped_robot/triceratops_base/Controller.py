@@ -179,26 +179,35 @@ class RobotControl:
         time.sleep(0.5)
         #self.control_cmd.reset_to_original()
         #time.sleep(0.5)
-        position = [[2048, 2048, 2048, 2048],
-                    [1900, 2048, 2090, 2048],
-                    [2600, 2048, 2090, 2300]]
+        # 支撐腳固定位置（FR=0, FL=1, RR=2, RL=3）
+        hip_pos    = [2048, 2048, 2048, 2048]
+        higher_FR  = 1900
+        higher_RR  = 2090
+        higher_RL  = 2048
+        lower_FR   = 2600
+        lower_RR   = 2090
+        lower_RL   = 2300
+
+        fl_lower_target = 1600
+        fl_upper_target = 1300
+
+        # 先站好支撐姿勢
+        position = [hip_pos,
+                    [higher_FR, 2048,            higher_RR, higher_RL],
+                    [lower_FR,  2048,             lower_RR,  lower_RL]]
         self.control_cmd.motor_position_control(position)
         print("[handshake] 站好，準備抬腿")
         time.sleep(1)
 
-        fl_lower_target = 1600
-        fl_upper_target = 1300
-        fl_bottom_target = 2048
-
         steps = 20
         for i in range(1, steps + 1):
-            progress = i / steps  # 0.05 → 1.0，不超出目標
+            progress = i / steps
             current_lower = int(2048 + progress * (fl_lower_target - 2048))
             current_upper = int(2048 + progress * (fl_upper_target - 2048))
             # leg_motor_list 順序: [0]=hip, [1]=higher, [2]=lower
-            position = [[2048, fl_bottom_target, 2048, 2048],
-                    [1900, current_upper, 2090, 2048],
-                    [2600, current_lower, 2090, 2300]]
+            position = [hip_pos,
+                        [higher_FR, current_upper, higher_RR, higher_RL],
+                        [lower_FR,  current_lower, lower_RR,  lower_RL]]
             self.control_cmd.motor_position_control(position)
             time.sleep(0.05)
 
