@@ -178,6 +178,10 @@ class RobotControl:
         self.stop_gait()
         time.sleep(0.5)
         self.control_cmd.reset_to_original()
+        position = [[2048, 2048, 2048, 2048],
+                    [1900, 2048, 2090, 2300],
+                    [2600, 2048, 2090, 2048]]
+        self.control_cmd.motor_position_control(position)
         print("[handshake] 站好，準備抬腿")
         time.sleep(1)
 
@@ -185,8 +189,9 @@ class RobotControl:
         fl_upper_target = 1300
         fl_bottom_target = 2048
 
-        for i in range(20):
-            progress = i / 10.0
+        steps = 20
+        for i in range(1, steps + 1):
+            progress = i / steps  # 0.05 → 1.0，不超出目標
             current_lower = int(2048 + progress * (fl_lower_target - 2048))
             current_upper = int(2048 + progress * (fl_upper_target - 2048))
             # leg_motor_list 順序: [0]=hip, [1]=higher, [2]=lower
@@ -194,6 +199,7 @@ class RobotControl:
                         [1900, current_upper,    2090, 2300],
                         [2600, current_lower,    2090, 2048]]
             self.control_cmd.motor_position_control(position)
+            time.sleep(0.05)
 
         print("[handshake] 握手姿勢保持中")
         time.sleep(2)
