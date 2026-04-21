@@ -295,8 +295,8 @@ class ControlCmd:
     def motor_position_control(self, position=None, waist=None):
         if position is None:
             position = [[2048, 2048, 2048, 2048],
-                        [1992, 2047, 2092, 2099],
-                        [2600, 2600, 2600, 2600]]
+                        [2048, 2047, 2048, 2048],
+                        [2048, 2048, 2048, 2048]]
 
         for i, motor_list in enumerate(self.leg_motor_list):
             for j, motor in enumerate(motor_list):
