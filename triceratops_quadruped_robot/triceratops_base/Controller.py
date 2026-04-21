@@ -191,8 +191,8 @@ class RobotControl:
             current_upper = int(2048 + progress * (fl_upper_target - 2048))
             # leg_motor_list 順序: [0]=hip, [1]=higher, [2]=lower
             position = [[2048, fl_bottom_target, 2048, 2048],
-                        [2048, current_upper,    2100, 2100],
-                        [1989, current_lower,    2048, 2001]]
+                        [1900, current_upper,    2090, 2300],
+                        [2600, current_lower,    2090, 2048]]
             self.control_cmd.motor_position_control(position)
 
         print("[handshake] 握手姿勢保持中")
