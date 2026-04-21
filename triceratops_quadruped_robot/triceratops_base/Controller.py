@@ -290,7 +290,8 @@ class ControlCmd:
         if position is None:
             position = [[2048, 2048, 2048, 2048],
                         [1992, 2047, 2092, 2099],
-                        [2048, 2048, 2048, 2048]]
+                        [2048, 2048, 2048, 2048],
+                        [2030,2030]]
 
         for i, motor_list in enumerate(self.leg_motor_list):
             for j, motor in enumerate(motor_list):
