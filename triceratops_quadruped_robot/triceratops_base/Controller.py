@@ -177,46 +177,58 @@ class RobotControl:
         print("[handshake] 開始握手動作")
         self.stop_gait()
         time.sleep(0.5)
-        #self.control_cmd.reset_to_original()
-        #time.sleep(0.5)
+        self.control_cmd.reset_to_original()
+        time.sleep(0.5)
         # 支撐腳固定位置（FR=0, FL=1, RR=2, RL=3）
-        hip_pos    = [2048, 2048, 2048, 2048]
-        higher_FR  = 1900
-        higher_RR  = 2090
-        higher_RL  = 2048
-        lower_FR   = 2600
-        lower_RR   = 2090
-        lower_RL   = 2300
+        hip_pos    = [2100, 2100, 2100, 2100]
+        higher_FR  = 2800
+        higher_FL  = 1300
+        higher_RR  = 1500
+        higher_RL  = 2650
+        lower_FR   = 2100
+        lower_FL   = 2048
+        lower_RR   = 1900
+        lower_RL   = 1149
 
-        fl_lower_target = 1600
-        fl_upper_target = 1300
+        fl_lower_target = 1400
+        fl_upper_target = 830
+
+        default_pos = [[2048, 2048, 2048, 2048],
+                        [2500, 1549, 1549, 2500],
+                        [2100, 1949, 1949, 2100]]
 
         # 先站好支撐姿勢
-        position = [hip_pos,
-                    [higher_FR, 2048,            higher_RR, higher_RL],
-                    [lower_FR,  2048,             lower_RR,  lower_RL]]
-        self.control_cmd.motor_position_control(position)
+        stand_pos = [hip_pos,
+                     [higher_FR, higher_FL, higher_RR, higher_RL],
+                     [lower_FR,  lower_FL, lower_RR,  lower_RL]]
+        self._ramp_to_position(default_pos, stand_pos,steps=5)
         print("[handshake] 站好，準備抬腿")
         time.sleep(1)
 
-        steps = 20
-        for i in range(1, steps + 1):
-            progress = i / steps
-            current_lower = int(2048 + progress * (fl_lower_target - 2048))
-            current_upper = int(2048 + progress * (fl_upper_target - 2048))
-            # leg_motor_list 順序: [0]=hip, [1]=higher, [2]=lower
-            position = [hip_pos,
-                        [higher_FR, current_upper, higher_RR, higher_RL],
-                        [lower_FR,  current_lower, lower_RR,  lower_RL]]
-            self.control_cmd.motor_position_control(position)
-            time.sleep(0.05)
+        fl_target_pos = [hip_pos,
+                         [higher_FR, fl_upper_target, higher_RR, higher_RL],
+                         [lower_FR,  fl_lower_target, lower_RR,  lower_RL]]
+        self._ramp_to_position(stand_pos, fl_target_pos)
 
         print("[handshake] 握手姿勢保持中")
         time.sleep(2)
+        self._ramp_to_position(fl_target_pos, stand_pos, steps=10)
+        time.sleep(1)
         self.control_cmd.reset_to_original()
         time.sleep(1)
         self.start_gait()
         print("[handshake] 完成")
+
+    def _ramp_to_position(self, start_position, target_position, steps=20, delay=0.05):
+        for i in range(1, steps + 1):
+            progress = i / steps
+            pos = [
+                [int(start_position[joint][leg] + progress * (target_position[joint][leg] - start_position[joint][leg]))
+                 for leg in range(4)]
+                for joint in range(3)
+            ]
+            self.control_cmd.motor_position_control(pos)
+            time.sleep(delay)
 
     def _handshake_thread(self):
         threading.Thread(target=self.handshake, daemon=True).start()
@@ -305,8 +317,8 @@ class ControlCmd:
     def motor_position_control(self, position=None, waist=None):
         if position is None:
             position = [[2048, 2048, 2048, 2048],
-                        [2048, 2047, 2048, 2048],
-                        [2048, 2048, 2048, 2048]]
+                        [2500, 1549, 1549, 2500],
+                        [2100, 1949, 1949, 2100]]
 
         for i, motor_list in enumerate(self.leg_motor_list):
             for j, motor in enumerate(motor_list):
