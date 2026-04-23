@@ -95,11 +95,14 @@ class RobotControl:
         mode = msg.data
         print(f"[robot_mode] 收到指令: {mode}")
         actions = {
-            "start_gait": self.start_gait,
-            "stop":       self.stop_gait,
-            "reset":      self.control_cmd.reset_to_original,
-            "handshake":  self._handshake_thread,
-            "sway":       self._sway_thread,
+            "start_gait":       self.start_gait,
+            "stop":             self.stop_gait,
+            "reset":            self.control_cmd.reset_to_original,
+            "handshake":        self._handshake_thread,
+            "sit":              self.sit,
+            "shake_head_left":  lambda: self._shake_head_thread("left"),
+            "shake_head_right": lambda: self._shake_head_thread("right"),
+            "shake_head_center":lambda: self._shake_head_thread("center"),
         }
         if mode in actions:
             actions[mode]()
@@ -172,6 +175,40 @@ class RobotControl:
             self.puppy_move_thread.join(timeout=3.0)
         print("[stop_gait] 步態停止")
 
+    def _get_handshake_positions(self):
+        hip_pos   = [2100, 2100, 2100, 2100]
+        higher_FR = 2800
+        higher_FL = 500
+        higher_RR = 1500
+        higher_RL = 2650
+        lower_FR  = 2100
+        lower_FL  = 1450
+        lower_RR  = 1900
+        lower_RL  = 1149
+
+        default_pos = [[2048, 2048, 2048, 2048],
+                       [2500, 1549, 1549, 2500],
+                       [2100, 1949, 1949, 2100]]
+        stand_pos   = [hip_pos,
+                       [higher_FR, higher_FL, higher_RR, higher_RL],
+                       [lower_FR,  lower_FL,  lower_RR,  lower_RL]]
+        hip_pos   = [2100, 1600, 2100, 2100]
+        fl_target_pos = [hip_pos,
+                         [higher_FR, 600,  higher_RR, higher_RL],
+                         [lower_FR,  1400, lower_RR,  lower_RL]]
+        return default_pos, stand_pos, fl_target_pos
+
+    def sit(self):
+        """移動到握手支撐站姿，供 debug 用"""
+        print("[sit] 開始")
+        self.stop_gait()
+        time.sleep(0.5)
+        self.control_cmd.reset_to_original()
+        time.sleep(0.5)
+        default_pos, stand_pos, _ = self._get_handshake_positions()
+        self._ramp_to_position(default_pos, stand_pos, steps=5)
+        print("[sit] 完成")
+
     def handshake(self):
         """停步態 → 站好 → 漸進抬 FL 腿做握手 → 回站姿 → 重啟步態"""
         print("[handshake] 開始握手動作")
@@ -179,37 +216,12 @@ class RobotControl:
         time.sleep(0.5)
         self.control_cmd.reset_to_original()
         time.sleep(0.5)
-        # 支撐腳固定位置（FR=0, FL=1, RR=2, RL=3）
-        hip_pos    = [2100, 2100, 2100, 2100]
-        higher_FR  = 2800
-        higher_FL  = 1300
-        higher_RR  = 1500
-        higher_RL  = 2650
-        lower_FR   = 2100
-        lower_FL   = 2048
-        lower_RR   = 1900
-        lower_RL   = 1149
-
-        fl_lower_target = 1400
-        fl_upper_target = 830
-
-        default_pos = [[2048, 2048, 2048, 2048],
-                        [2500, 1549, 1549, 2500],
-                        [2100, 1949, 1949, 2100]]
-
-        # 先站好支撐姿勢
-        stand_pos = [hip_pos,
-                     [higher_FR, higher_FL, higher_RR, higher_RL],
-                     [lower_FR,  lower_FL, lower_RR,  lower_RL]]
-        self._ramp_to_position(default_pos, stand_pos,steps=5)
+        default_pos, stand_pos, fl_target_pos = self._get_handshake_positions()
+        self._ramp_to_position(default_pos, stand_pos, steps=5)
         print("[handshake] 站好，準備抬腿")
         time.sleep(1)
 
-        fl_target_pos = [hip_pos,
-                         [higher_FR, fl_upper_target, higher_RR, higher_RL],
-                         [lower_FR,  fl_lower_target, lower_RR,  lower_RL]]
         self._ramp_to_position(stand_pos, fl_target_pos)
-
         print("[handshake] 握手姿勢保持中")
         time.sleep(2)
         self._ramp_to_position(fl_target_pos, stand_pos, steps=10)
@@ -248,6 +260,19 @@ class RobotControl:
     def _sway_thread(self):
         threading.Thread(target=self.sway, daemon=True).start()
 
+    HEAD_PAN = {"left": 1800, "right": 2250, "center": 2048}
+
+    def shake_head(self, mode):
+        target = self.HEAD_PAN.get(mode)
+        if target is None:
+            print(f"[shake_head] 未知 mode: {mode}，可用: left / right / center")
+            return
+        print(f"[shake_head] {mode}")
+        self.control_cmd.head_motor_control(target)
+
+    def _shake_head_thread(self, mode):
+        threading.Thread(target=self.shake_head, args=(mode,), daemon=True).start()
+
 
 class ControlCmd:
     """Low-level control of Dynamixel motors."""
@@ -267,9 +292,10 @@ class ControlCmd:
                        'FL_higher', 'FL_lower', 'FL_hip',
                        'RR_higher', 'RR_lower', 'RR_hip',
                        'RL_higher', 'RL_lower', 'RL_hip',
-                       'waist_axis1', 'waist_axis2']
+                       'waist_axis1', 'waist_axis2',
+                       'head_tilt', 'head_pan']
 
-        self.motor_ids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+        self.motor_ids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
         self.motors = {name: self.dynamixel.createMotor(name, motor_number=id_)
                        for name, id_ in zip(motor_names, self.motor_ids)}
 
@@ -284,6 +310,9 @@ class ControlCmd:
         self.dynamixel.updateMotorData()
         self.enable_all_motor()
         self.joint_position = np.zeros(12)
+        self.head_pan_position = 2048
+        self.waist_position = 2048
+        self.last_commanded_position = [[2048]*4, [2048]*4, [2048]*4]
 
     def __del__(self):
         self.cleanup()
@@ -301,8 +330,25 @@ class ControlCmd:
             motor.disableMotor()
 
     def read_all_motor_data(self):
-        self.update_joint_state()
-        return print(self.joint_position)
+        pos = self.last_commanded_position
+        print(f"[last commanded]")
+        print(f"  hip    : {pos[0]}")
+        print(f"  higher : {pos[1]}")
+        print(f"  lower  : {pos[2]}")
+        print(f"  waist  : {self.waist_position}  head_pan: {self.head_pan_position}")
+
+    def test_bulk_read(self, n=50):
+        success, fail = 0, 0
+        for _ in range(n):
+            before = self.dynamixel._DXL_Communication__communicate_error_count
+            self.dynamixel.updateMotorData()
+            after = self.dynamixel._DXL_Communication__communicate_error_count
+            if after > before:
+                fail += 1
+            else:
+                success += 1
+            time.sleep(0.02)
+        print(f"[bulk_read_test] {n} 次: 成功 {success}, 失敗 {fail}, 失敗率 {fail/n*100:.1f}%")
 
     def update_joint_state(self):
         self.dynamixel.updateMotorData()
@@ -320,6 +366,7 @@ class ControlCmd:
                         [2500, 1549, 1549, 2500],
                         [2100, 1949, 1949, 2100]]
 
+        self.last_commanded_position = position
         for i, motor_list in enumerate(self.leg_motor_list):
             for j, motor in enumerate(motor_list):
                 motor.writePosition(int(position[i][j]))
@@ -328,13 +375,25 @@ class ControlCmd:
             waist = [2048, 2030]
         self.motors['waist_axis1'].writePosition(int(waist[0]))
         self.motors['waist_axis2'].writePosition(int(waist[1]))
+        self.motors['head_pan'].writePosition(2048)
 
         self.dynamixel.sentAllCmd()
 
+    def head_motor_control(self, target_position, step=10, delay=0.01):
+        current = self.head_pan_position
+        direction = 1 if target_position > current else -1
+        while (direction == 1 and current < target_position) or \
+              (direction == -1 and current > target_position):
+            current += direction * step
+            current = min(current, target_position) if direction == 1 else max(current, target_position)
+            self.motors['head_pan'].writePosition(current)
+            self.dynamixel.sentAllCmd()
+            time.sleep(delay)
+        self.head_pan_position = target_position
+
     def mid_motor_position_control(self, mid_position, step=20, delay=0.01):
         """漸進移動腰部馬達到目標位置"""
-        self.dynamixel.updateMotorData()
-        current = self.motors['waist_axis1'].PRESENT_POSITION_value
+        current = self.waist_position
         direction = 1 if mid_position > current else -1
 
         while (direction == 1 and current < mid_position) or \
@@ -345,6 +404,7 @@ class ControlCmd:
             self.motors['waist_axis2'].writePosition(current)
             self.dynamixel.sentAllCmd()
             time.sleep(delay)
+        self.waist_position = mid_position
 
 
 def main():
@@ -359,8 +419,13 @@ def main():
         "enable":   robot_control.control_cmd.enable_all_motor,
         "disable":  robot_control.control_cmd.disable_all_motor,
         "read":     robot_control.control_cmd.read_all_motor_data,
-        "handshake":robot_control._handshake_thread,
-        "sway":     robot_control._sway_thread,
+        "test_read":robot_control.control_cmd.test_bulk_read,
+        "handshake":  robot_control._handshake_thread,
+        "sway":       robot_control._sway_thread,
+        "sit":        robot_control.sit,
+        "shake_head_left":  lambda: robot_control._shake_head_thread("left"),
+        "shake_head_right": lambda: robot_control._shake_head_thread("right"),
+        "shake_head_center":lambda: robot_control._shake_head_thread("center"),
     }
 
     atexit.register(robot_control.cleanup)
